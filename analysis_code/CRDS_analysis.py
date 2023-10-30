@@ -434,6 +434,7 @@ class CRDS_analysis:
         for i in range(len(specGraphs)):
             hitOutsY.append( specGraphs[i][1] )
         hInterp = scipy.interpolate.interp1d(fitGraphX, fitGraphY)
+        hInterp_rdt = scipy.interpolate.interp1d(fitGraphX,self.rdtFromAlpha(fitGraphY,fitGraphX)*1e6)
         hitOutTotalY = hInterp(hitOutX) #Total hitran absorption is interpolated on same x axis
         
         #Put all raw data into a pandas DataFrame for storage into HDF5 file
@@ -498,7 +499,9 @@ class CRDS_analysis:
             absorption = 1.0/c_cm*(1.0/(rdts_sorted*1e-6) - 1.0/self.vacuumRingdown(wl_sorted))
             rdt_dict = {'Wavelength (nm)' : wl_sorted, 
                         'Ringdown Time (us)' : rdts_sorted, 
-                        'Absorption (cm^-1)' : absorption}
+                        'Absorption (cm^-1)' : absorption,
+                        'Absorption FIT (cm^-1)' : hInterp(wl_sorted),
+                        'Ringdown FIT (us)' : hInterp_rdt(wl_sorted)}
             rdt_store = pd.DataFrame(rdt_dict).to_records(index=False)
             f.create_dataset("Ringdown Data", data = rdt_store)
         
@@ -530,8 +533,7 @@ class CRDS_analysis:
             hitran_dict['Total Fit (cm^-1)'] = hitOutTotalY
         
             #Store HITRAN absorption converted back to ringdown time
-            hInterp = scipy.interpolate.interp1d(fitGraphX,self.rdtFromAlpha(fitGraphY,fitGraphX)*1e6)
-            hitran_dict["Total Fit Ringdown Time (us)"] = hInterp(hitOutX)
+            hitran_dict["Total Fit Ringdown Time (us)"] = hInterp_rdt(hitOutX)
         
             #Store all hitran curves in dataset called "HITRAN fit"
             dsetData = pd.DataFrame(hitran_dict).to_records(index=False)
