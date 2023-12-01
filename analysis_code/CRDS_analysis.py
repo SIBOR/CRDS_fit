@@ -259,9 +259,7 @@ class CRDS_analysis:
         plt.xlabel("Wavelength (nm)")
         plt.legend()
         
-        
-        
-    
+    # Returns a pandas dataframe which prints nicely in Jupyter notebooks
     def getConcentrationTable(self, crds_fit_object, coeffs, piecewiseFit=False, rdt_dat=None):
         if(piecewiseFit):
             tempSlices, splitTemps = self.getTempSlices()
@@ -312,8 +310,9 @@ class CRDS_analysis:
 
         return pd.DataFrame(fancyTable)
     
-    #------------Plotting functions for convenience-----------           
-    def plotDataAndVacuumFit(self):
+    #------------Plotting functions for convenience-----------
+    # Plot both the measurement and vacuum baseline, along with the linear baseline fit
+    def plotDataAndVacuumFit(self, **plot_args):
         wls_vac = self.wavelength(self.vacTemps_measured,self.vacCurrs)
         
         #Make some x points in the data range, just so we can plot the line
@@ -330,14 +329,91 @@ class CRDS_analysis:
         dataVacuum = np.transpose(dVac)
         del d
         del dVac
+
+        dat_args = plot_args.copy()
+        size=(12,4)
+        if( 'figsize' in plot_args):
+            size=plot_args['figsize']
+            del dat_args['figsize']
+        fig = plt.figure(figsize=size)
         
-        plt.figure(figsize=(12,4))
         plt.plot(data[0],data[1]*1e6, label = 'Filled Chamber')
         plt.plot(dataVacuum[0],dataVacuum[1]*1e6, label = 'Empty Chamber')
         plt.plot(x,self.vacuumRingdown(x)*1e6,label = 'Theil-Sen Fit')
         plt.ylabel("Ringdown time ($\mathrm{\mu}$s)")
         plt.xlabel("Wavelength (nm)")
         plt.legend()
+
+    # Plot the scale fit which results from the given wavelength fit coefficients
+    def plotWavlengthFit(self, wlCoeffs, crds_fit_object, rdt_dat=None, **plot_args):
+        temps = np.array(self.temps_measured,dtype=float)
+        #temps = np.array(dat['ldc_params'])[:,0]
+        currs = self.currs
+        if(rdt_dat is None):
+            rdts  = np.array(self.dat['rdt_mean'])
+        else:
+            rdts = np.array(rdt_dat)
+
+
+        wavelengths = wlCoeffs[0] + currs*wlCoeffs[1] + temps*wlCoeffs[2] + \
+            currs**2*wlCoeffs[3] + temps**2*wlCoeffs[4] + currs*temps*wlCoeffs[5]
+
+        absorptions = 1.0/c_cm*(1.0/rdts - 1.0/self.vacuumRingdown(wavelengths))
+
+        fitGraphX, fitGraphY = crds_fit_object.computeTotalFitGraph(wavelengths, rdts, vacFit = self.vacFit)
+        fitGraphY = self.rdtFromAlpha(fitGraphY, fitGraphX)*1e6
+
+        dat_args = plot_args.copy()
+        fit_args = plot_args.copy()
+        spec_args = plot_args.copy()
+        size=(12,4)
+        if( 'figsize' in plot_args):
+            size=plot_args['figsize']
+            del dat_args['figsize'], fit_args['figsize'], spec_args['figsize']
+        fig = plt.figure(figsize=size)
+
+        ax = plt.subplot(111) # Axis handle for custom legend
+
+        dat_args.setdefault('markersize', 2)
+        ax.plot(wavelengths,rdts*1e6,'o',label='Data', **dat_args)
+        specPlots = crds_fit_object.plotFit_rdt(wavelengths, rdts, vacFit=self.vacFit)
+
+        spec_args.setdefault('color')
+        # HITRAN molecules
+        for i in range(0,len(crds_fit_object.mols)):
+            iso_id = crds_fit_object.isos[i]
+            mol_id = crds_fit_object.molecules[crds_fit_object.mols[i]]['hitran']
+            if(iso_id != 1):
+                lbl=crds_fit_object.hapi.isotopologueName(mol_id,iso_id)
+            else:
+                lbl = crds_fit_object.mols[i]
+
+            ax.plot(specPlots[i][0],specPlots[i][1]*1e6,label=lbl, **spec_args)
+
+        # Non-HITRAN Cross sections
+        for k,v in crds_fit_object.aux_indices.items():
+            ax.plot(specPlots[v][0],specPlots[v][1]*1e6,label=k, **spec_args)
+
+        # Shrink current axis by 20%
+        box = ax.get_position()
+        ax.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+
+        fit_args.setdefault('color', 'black')
+        fit_args.setdefault('lw',    0.75)
+        ax.plot(fitGraphX,fitGraphY,label='Total Fit', **fit_args)
+        xMin, xMax = np.min(wavelengths),np.max(wavelengths)
+        plt.xlim(xMin,xMax)
+        plt.ylabel("Ringdown time ($\mathrm{\mu}$s)")
+        plt.xlabel("Wavelength (nm)")
+
+        # Shrink current axis by 20%
+        box = ax.get_position()
+        ax.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+
+        # Put a legend to the right of the current axis
+        ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+
+        #plt.legend()
         
     def plotTemperatureSlices(self):
         tempSlices, splitTemps = self.getTempSlices()
@@ -367,50 +443,6 @@ class CRDS_analysis:
         plt.plot(wavelengths,rdts,'o',markersize=2)
         plt.plot(fitGraphX,self.rdtFromAlpha(fitGraphY,fitGraphX),c='black')
     
-    def plotWavlengthFit(self, wlCoeffs, crds_fit_object, rdt_dat=None):
-        temps = np.array(self.temps_measured,dtype=float)
-        #temps = np.array(dat['ldc_params'])[:,0]
-        currs = self.currs
-        if(rdt_dat is None):
-            rdts  = np.array(self.dat['rdt_mean'])
-        else:
-            rdts = np.array(rdt_dat)
-            
-        
-        wavelengths = wlCoeffs[0] + currs*wlCoeffs[1] + temps*wlCoeffs[2] + \
-            currs**2*wlCoeffs[3] + temps**2*wlCoeffs[4] + currs*temps*wlCoeffs[5]
-
-        absorptions = 1.0/c_cm*(1.0/rdts - 1.0/self.vacuumRingdown(wavelengths))
-        
-        fitGraphX, fitGraphY = crds_fit_object.computeTotalFitGraph(wavelengths, rdts, vacFit = self.vacFit)
-        fitGraphY = self.rdtFromAlpha(fitGraphY, fitGraphX)*1e6
-        
-        plt.figure(figsize=(12,4))
-        plt.plot(wavelengths,rdts*1e6,'o',label='Data',markersize=2)
-        specPlots = crds_fit_object.plotFit_rdt(wavelengths, rdts, vacFit=self.vacFit)
-        
-        # HITRAN molecules
-        for i in range(0,len(crds_fit_object.mols)):
-            iso_id = crds_fit_object.isos[i]
-            mol_id = crds_fit_object.molecules[crds_fit_object.mols[i]]['hitran']
-            if(iso_id != 1):
-                lbl=crds_fit_object.hapi.isotopologueName(mol_id,iso_id)
-            else:
-                lbl = crds_fit_object.mols[i]
-            
-            plt.plot(specPlots[i][0],specPlots[i][1]*1e6,label=lbl)
-
-        # Non-HITRAN stuff
-        for k,v in crds_fit_object.aux_indices.items():
-            plt.plot(specPlots[v][0],specPlots[v][1]*1e6,label=k)
-
-        plt.plot(fitGraphX,fitGraphY,label='Total Fit',c='black', lw = 0.75)
-        xMin, xMax = np.min(wavelengths),np.max(wavelengths)
-        plt.xlim(xMin,xMax)
-        plt.ylabel("Ringdown time ($\mathrm{\mu}$s)")
-        plt.xlabel("Wavelength (nm)")
-        plt.legend()
-        
     def plotScaledHitran(self, wlCoeffs, crds_fit_object,plot_rdt = True):
         wl = self.wavelength(self.temps_measured, self.currs, wlCoeffs)
         hitX, hitY = crds_fit_object.computeTotalFitGraph(wl,np.array(self.dat['rdt_mean']))
