@@ -117,7 +117,7 @@ class CRDS_analysis:
     
     
     #Global wavelength fitting
-    def fitWavelengthCoefficients(self, wlCoeffs_guess, crds_fit_object):
+    def fitWavelengthCoefficients(self, wlCoeffs_guess, crds_fit_object, **fit_args):
         if(crds_fit_object.basisData is None):
             print("Need to compute HITRAN basis for CRDS_Fit object!!!")
         #define an error function to be minimized using scipy.optimize
@@ -137,6 +137,12 @@ class CRDS_analysis:
             rsqr = np.sum((rdts - self.rdtFromAlpha(fitInterp(wavelengths),wavelengths))**2)
             print("%.4e" % rsqr)
             return rsqr
+
+        # Set arguments for nonlinear fitting of wavelength coefficients
+        fg = fit_args.copy()
+        fg.setdefault('method', 'Nelder-Mead')
+        fg.setdefault('tol', 1e-8)
+        fg.setdefault('options', {'maxiter': 1000, 'maxfev':10000})
         res = scipy.optimize.minimize(computeResSqr2ndOrder,wlCoeffs_guess,
                                       method = 'Nelder-Mead',
                                       tol = 1e-8,options={'maxiter': 1000, 'maxfev':10000})
