@@ -344,8 +344,7 @@ class CRDS_analysis:
         plt.xlabel("Wavelength (nm)")
         plt.legend()
 
-    # Plot the scale fit which results from the given wavelength fit coefficients
-    def plotWavlengthFit(self, wlCoeffs, crds_fit_object, rdt_dat=None, **plot_args):
+    def plotResidual(self, wlCoeffs, crds_fit_object, rdt_dat=None,**plot_args):
         temps = np.array(self.temps_measured,dtype=float)
         #temps = np.array(dat['ldc_params'])[:,0]
         currs = self.currs
@@ -365,8 +364,55 @@ class CRDS_analysis:
 
         dat_args = plot_args.copy()
         fit_args = plot_args.copy()
-        spec_args = plot_args.copy()
         size=(12,4)
+        if( 'figsize' in plot_args):
+            size=plot_args['figsize']
+            del dat_args['figsize'], fit_args['figsize']
+        fig, (ax1, ax2) = plt.subplots(2, sharex=True, figsize=size)
+
+        dat_args.setdefault('markersize', 2)
+        ax1.plot(wavelengths,rdts*1e6,'o',label='Data', **dat_args)
+
+        fit_args.setdefault('color', 'black')
+        fit_args.setdefault('lw',    0.75)
+        ax1.plot(fitGraphX,fitGraphY,label='Total Fit', **fit_args)
+
+        fitInterp = scipy.interpolate.interp1d(fitGraphX, fitGraphY)
+        ax2.plot(wavelengths,rdts*1e6 - fitInterp(wavelengths), **fit_args)
+
+        xMin, xMax = np.min(wavelengths),np.max(wavelengths)
+        plt.xlim(xMin,xMax)
+        ax1.set_ylabel("Ringdown time ($\mathrm{\mu}$s)")
+        ax2.set_ylabel("Residual ($\mathrm{\mu}$s)")
+        ax2.set_xlabel("Wavelength (nm)")
+        ax1.grid()
+        ax2.grid()
+
+
+    # Plot the scale fit which results from the given wavelength fit coefficients
+    def plotWavlengthFit(self, wlCoeffs, crds_fit_object, rdt_dat=None, spec_plot_args=None, **plot_args):
+        temps = np.array(self.temps_measured,dtype=float)
+        #temps = np.array(dat['ldc_params'])[:,0]
+        currs = self.currs
+        if(rdt_dat is None):
+            rdts  = np.array(self.dat['rdt_mean'])
+        else:
+            rdts = np.array(rdt_dat)
+
+
+        wavelengths = wlCoeffs[0] + currs*wlCoeffs[1] + temps*wlCoeffs[2] + \
+            currs**2*wlCoeffs[3] + temps**2*wlCoeffs[4] + currs*temps*wlCoeffs[5]
+        xMin, xMax = np.min(wavelengths),np.max(wavelengths)
+
+        absorptions = 1.0/c_cm*(1.0/rdts - 1.0/self.vacuumRingdown(wavelengths))
+
+        fitGraphX, fitGraphY = crds_fit_object.computeTotalFitGraph(wavelengths, rdts, vacFit = self.vacFit)
+        fitGraphY = self.rdtFromAlpha(fitGraphY, fitGraphX)*1e6
+
+        dat_args = plot_args.copy()
+        fit_args = plot_args.copy()
+        spec_args = plot_args.copy()
+        size=(18.8,4)
         if( 'figsize' in plot_args):
             size=plot_args['figsize']
             del dat_args['figsize'], fit_args['figsize'], spec_args['figsize']
@@ -387,21 +433,28 @@ class CRDS_analysis:
                 lbl=crds_fit_object.hapi.isotopologueName(mol_id,iso_id)
             else:
                 lbl = crds_fit_object.mols[i]
-
-            ax.plot(specPlots[i][0],specPlots[i][1]*1e6,label=lbl, **spec_args)
+            override = False
+            if(spec_plot_args is not None): # Allow user to override arguments for a specific plot
+                for spa in spec_plot_args:
+                    if(spa[0] == '%s-%d' % (crds_fit_object.mols[i], iso_id)):
+                        ax.plot(specPlots[i][0],specPlots[i][1]*1e6,label=lbl, **spa[1])
+                        override=True
+                        break
+            if(not override): # Remainder of keyword arguments are parssed to default plot call
+                ax.plot(specPlots[i][0],specPlots[i][1]*1e6,label=lbl, **spec_args)
 
         # Non-HITRAN Cross sections
         for k,v in crds_fit_object.aux_indices.items():
-            ax.plot(specPlots[v][0],specPlots[v][1]*1e6,label=k, **spec_args)
+            smask = (specPlots[v][0] >= xMin) & (specPlots[v][0] <= xMax)
+            ax.plot(specPlots[v][0][smask],specPlots[v][1][smask]*1e6,label=k, **spec_args)
 
-        # Shrink current axis by 20%
+        # Shrink current axis by 20%, make room for legend outside plot
         box = ax.get_position()
         ax.set_position([box.x0, box.y0, box.width * 0.8, box.height])
 
         fit_args.setdefault('color', 'black')
         fit_args.setdefault('lw',    0.75)
         ax.plot(fitGraphX,fitGraphY,label='Total Fit', **fit_args)
-        xMin, xMax = np.min(wavelengths),np.max(wavelengths)
         plt.xlim(xMin,xMax)
         plt.ylabel("Ringdown time ($\mathrm{\mu}$s)")
         plt.xlabel("Wavelength (nm)")
