@@ -318,7 +318,7 @@ class CRDS_analysis:
     
     #------------Plotting functions for convenience-----------
     # Plot both the measurement and vacuum baseline, along with the linear baseline fit
-    def plotDataAndVacuumFit(self, **plot_args):
+    def plotDataAndVacuumFit(self, legend_args=None, **plot_args):
         wls_vac = self.wavelength(self.vacTemps_measured,self.vacCurrs)
         
         #Make some x points in the data range, just so we can plot the line
@@ -348,9 +348,12 @@ class CRDS_analysis:
         plt.plot(x,self.vacuumRingdown(x)*1e6,label = 'Theil-Sen Fit')
         plt.ylabel("Ringdown time ($\mathrm{\mu}$s)")
         plt.xlabel("Wavelength (nm)")
-        plt.legend()
+        if(legend_args is None):
+            plt.legend()
+        else:
+            plt.legend(**legend_args)
 
-    def plotResidual(self, wlCoeffs, crds_fit_object, rdt_dat=None,**plot_args):
+    def plotResidual(self, wlCoeffs, crds_fit_object, rdt_dat=None, fontsize=16, labelsize=14, legend_args=None, **plot_args):
         temps = np.array(self.temps_measured,dtype=float)
         #temps = np.array(dat['ldc_params'])[:,0]
         currs = self.currs
@@ -388,15 +391,24 @@ class CRDS_analysis:
 
         xMin, xMax = np.min(wavelengths),np.max(wavelengths)
         plt.xlim(xMin,xMax)
-        ax1.set_ylabel("Ringdown time ($\mathrm{\mu}$s)")
-        ax2.set_ylabel("Residual ($\mathrm{\mu}$s)")
-        ax2.set_xlabel("Wavelength (nm)")
-        ax1.grid()
-        ax2.grid()
+        ax1.set_ylabel("Ringdown time ($\mathrm{\mu}$s)", size=fontsize)
+        ax2.set_ylabel("Residual ($\mathrm{\mu}$s)", size=fontsize)
+        ax2.set_xlabel("Wavelength (nm)", size=fontsize)
+        #ax1.grid()
+        #ax2.grid()
+
+        ax2.tick_params(axis='x', which='both', labelsize=labelsize) # font size of x axis
+        ax1.tick_params(axis='y', which='both', labelsize=labelsize) # font size of y axis
+        ax2.tick_params(axis='y', which='both', labelsize=labelsize) # font size of y axis
+
+        if(legend_args is None):
+            ax1.legend()
+        elif(legend_args != 'off'):
+            ax1.legend(**legend_args)
 
 
     # Plot the scale fit which results from the given wavelength fit coefficients
-    def plotWavlengthFit(self, wlCoeffs, crds_fit_object, rdt_dat=None, spec_plot_args=None, **plot_args):
+    def plotWavlengthFit(self, wlCoeffs, crds_fit_object, rdt_dat=None, fontsize=16, labelsize=14, legend_args=None, spec_plot_args=None, **plot_args):
         temps = np.array(self.temps_measured,dtype=float)
         #temps = np.array(dat['ldc_params'])[:,0]
         currs = self.currs
@@ -462,15 +474,22 @@ class CRDS_analysis:
         fit_args.setdefault('lw',    0.75)
         ax.plot(fitGraphX,fitGraphY,label='Total Fit', **fit_args)
         plt.xlim(xMin,xMax)
-        plt.ylabel("Ringdown time ($\mathrm{\mu}$s)")
-        plt.xlabel("Wavelength (nm)")
+        plt.ylabel("Ringdown time ($\mathrm{\mu}$s)", size=fontsize)
+        plt.xlabel("Wavelength (nm)", size=fontsize)
+
+        ax.tick_params(axis='x', which='both', labelsize=labelsize) # font size of x axis
+        ax.tick_params(axis='y', which='both', labelsize=labelsize) # font size of y axis
 
         # Shrink current axis by 20%
-        box = ax.get_position()
-        ax.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+        if(legend_args != 'off'):
+            box = ax.get_position()
+            ax.set_position([box.x0, box.y0, box.width * 0.8, box.height])
 
         # Put a legend to the right of the current axis
-        ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+        if(legend_args is None):
+            ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+        elif(legend_args != 'off'):
+            ax.legend(loc='center left', bbox_to_anchor=(1, 0.5), **legend_args)
 
         #plt.legend()
         
