@@ -47,7 +47,7 @@ class CRDS_analysis:
             if(tm[i] is None):
                 #print(i)
                 tm[i] = tm[i+1]
-        self.temps_measured=tm
+        self.temps_measured=np.array(tm, dtype=float)
                 
         #Do the same for the vacuum data
         if('ldc_meas' in self.datVacuum):       #Compatiblility with older versions of CRDS program
@@ -59,7 +59,7 @@ class CRDS_analysis:
             if(tm[i] is None):
                 #print(i)
                 tm[i] = tm[i+1]
-        self.vacTemps_measured = tm
+        self.vacTemps_measured = np.array(tm, dtype=float)
         
         self.fitVacuumData()
                 
@@ -75,6 +75,18 @@ class CRDS_analysis:
             c = coeffs
         return c[0] + c[1]*curr + c[2]*temp + \
                c[3]*curr**2 + c[4]*temp**2 + c[5]*temp*curr
+
+    def coeffTransform(self, coeffs, tempCenter, currCenter):
+        T0, I0 = tempCenter, currCenter
+        c0, c1, c2, c3, c4, c5 = coeffs
+        coeffsNew = [c0 - c1*I0 - c2*T0 + c3*I0**3 + c4*T0**2,
+                    c1 - 2*c3*I0 - c5*T0,
+                    c2 - 2*c4*T0 - c5*I0,
+                    c3,
+                    c4,
+                    c5]
+        return np.array(coeffsNew)
+
                
     def fitVacuumData(self):
         currs = np.array(self.datVacuum['ldc_params'])[:,1]
@@ -109,6 +121,41 @@ class CRDS_analysis:
         tempSlices.append([temps[(splitIndices[-1])::],currs[(splitIndices[-1])::], rdts[(splitIndices[-1])::]])
         return tempSlices,splitTemps
     
+    def tossOutliers(self, std_ratio=2, confirm_toss=False, **plot_args):
+        stds=[]
+        rdts_mean = np.array(self.dat['rdt_mean'])
+        for i,w in enumerate(self.dat['wavelength']):
+            stds.append(np.std(self.dat['rdt_array'][i]))
+        s = np.array(stds)/rdts_mean
+        smin, smax = np.min(s), np.max(s)
+        smed, smean, sstd = np.median(s), np.mean(s), np.std(s)
+        print("Median std/tau : %.2f us" % (smed))
+        print("Mean std/taus : %.2f us" % (smean))
+        print("Standard deviation std/tau : %.2f us" % (sstd))
+
+        #if((sstd < smed) and (sstd < smean)):
+        #    print("No outliers detected")
+        #    return
+        mask = (s-smed) > sstd*std_ratio
+        N = len(np.where(mask)[0])
+        print("Number of tossed points: %d " % N)
+
+        size=(12,2)
+        args = plot_args.copy()
+        if( 'figsize' in plot_args):
+            size=plot_args['figsize']
+            del args['figsize']
+
+        plt.figure(figsize=size)
+        plt.plot(self.dat['wavelength'], rdts_mean, 'o', ms=1, c='black')
+        plt.plot(np.array(self.dat['wavelength'])[mask], rdts_mean[mask], 'o', ms=3, c='red')
+
+        if(confirm_toss):
+            for k,v in self.dat.items():
+                self.dat[k] = np.array(v)[~mask]
+            self.currs = np.array(self.currs)[~mask]
+            self.temps_measured = np.array(self.temps_measured)[~mask]
+
     #Get total fit graph
     def getScaledHitran(self, wlCoeffs, crds_fit_object,plot_rdt = True):
         wl = self.wavelength(self.temps_measured, self.currs, wlCoeffs)
@@ -117,18 +164,30 @@ class CRDS_analysis:
     
     
     #Global wavelength fitting
-    def fitWavelengthCoefficients(self, wlCoeffs_guess, crds_fit_object, **fit_args):
+    def fitWavelengthCoefficients(self, wlCoeffs_guess, crds_fit_object, center_fit=False, **fit_args):
         if(crds_fit_object.basisData is None):
             print("Need to compute HITRAN basis for CRDS_Fit object!!!")
+
+        temps = self.temps_measured
+        currs = self.currs
+        rdts  = np.array(self.dat['rdt_mean'])
+
+        if(center_fit):
+            # Center the polynomial around mean measurement values
+            I0, T0 = np.median(currs), np.median(temps)
+            c_guess = self.coeffTransform(wlCoeffs_guess, -T0, -I0)
+        else:
+            c_guess = wlCoeffs_guess
         #define an error function to be minimized using scipy.optimize
         def computeResSqr2ndOrder(params):
-            temps = np.array(self.temps_measured,dtype=float)
-            #temps = np.array(dat['ldc_params'])[:,0]
-            currs = self.currs
-            rdts  = np.array(self.dat['rdt_mean'])
             
-            wavelengths = params[0] + currs*params[1] + temps*params[2] + currs**2*params[3] + temps**2*params[4] + currs*temps*params[5]
-            print(params)
+            # Evaluate in the uncentered form to stay consistent
+            if(center_fit):
+                c = self.coeffTransform(params, T0, I0)
+            else:
+                c = params
+            wavelengths = c[0] + currs*c[1] + temps*c[2] + currs**2*c[3] + temps**2*c[4] + currs*temps*c[5]
+            print(c)
             absorptions = 1.0/c_cm*(1.0/rdts - 1.0/self.vacuumRingdown(wavelengths))
             
             fitGraphX, fitGraphY = crds_fit_object.computeTotalFitGraph(wavelengths, rdts, vacFit=self.vacFit)
@@ -143,9 +202,12 @@ class CRDS_analysis:
         fg.setdefault('method', 'Nelder-Mead')
         fg.setdefault('tol', 1e-8)
         fg.setdefault('options', {'maxiter': 1000, 'maxfev':10000})
-        res = scipy.optimize.minimize(computeResSqr2ndOrder,wlCoeffs_guess,
+        res = scipy.optimize.minimize(computeResSqr2ndOrder,c_guess,
                                       method = 'Nelder-Mead',
                                       tol = 1e-8,options={'maxiter': 1000, 'maxfev':10000})
+        if(center_fit):
+            res['x_untransformed'] = res['x']
+            res['x'] = self.coeffTransform(res['x'], T0, I0)
         return res
     
     def fitWavelengthPiecewise(self,crds_fit_object,wlCoeffs):
@@ -266,7 +328,7 @@ class CRDS_analysis:
         plt.legend()
         
     # Returns a pandas dataframe which prints nicely in Jupyter notebooks
-    def getConcentrationTable(self, crds_fit_object, coeffs, piecewiseFit=False, rdt_dat=None):
+    def getConcentrationTable(self, crds_fit_object, coeffs, piecewiseFit=False, rdt_dat=None, weighted=True):
         if(piecewiseFit):
             tempSlices, splitTemps = self.getTempSlices()
             wl_rc = []
@@ -289,7 +351,7 @@ class CRDS_analysis:
                 rdts = np.array(rdt_dat)
             wavelengths = coeffs[0] + currs*coeffs[1] + temps*coeffs[2] + currs**2*coeffs[3] + temps**2*coeffs[4] + currs*temps*coeffs[5]
             
-        datFit = crds_fit_object.computeFitScales(wavelengths,rdts,vacFit=self.vacFit)
+        datFit = crds_fit_object.computeFitScales(wavelengths,rdts,vacFit=self.vacFit, weighted=weighted)
         
         fancyTable = { 'Molecule' : [],
                        'Isotopologue ID' : [],
@@ -353,7 +415,7 @@ class CRDS_analysis:
         else:
             plt.legend(**legend_args)
 
-    def plotResidual(self, wlCoeffs, crds_fit_object, rdt_dat=None, fontsize=16, labelsize=14, legend_args=None, **plot_args):
+    def plotResidual(self, wlCoeffs, crds_fit_object, rdt_dat=None, weighted=True, fontsize=16, labelsize=14, legend_args=None, **plot_args):
         temps = np.array(self.temps_measured,dtype=float)
         #temps = np.array(dat['ldc_params'])[:,0]
         currs = self.currs
@@ -366,9 +428,12 @@ class CRDS_analysis:
         wavelengths = wlCoeffs[0] + currs*wlCoeffs[1] + temps*wlCoeffs[2] + \
             currs**2*wlCoeffs[3] + temps**2*wlCoeffs[4] + currs*temps*wlCoeffs[5]
 
+        # Sort points according to transformed wavelength
+        wavelengths, rdts = np.transpose(sorted(zip(wavelengths, rdts)))
+
         absorptions = 1.0/c_cm*(1.0/rdts - 1.0/self.vacuumRingdown(wavelengths))
 
-        fitGraphX, fitGraphY = crds_fit_object.computeTotalFitGraph(wavelengths, rdts, vacFit = self.vacFit)
+        fitGraphX, fitGraphY = crds_fit_object.computeTotalFitGraph(wavelengths, rdts, vacFit = self.vacFit, weighted=weighted)
         fitGraphY = self.rdtFromAlpha(fitGraphY, fitGraphX)*1e6
 
         dat_args = plot_args.copy()
@@ -388,6 +453,8 @@ class CRDS_analysis:
 
         fitInterp = scipy.interpolate.interp1d(fitGraphX, fitGraphY)
         ax2.plot(wavelengths,rdts*1e6 - fitInterp(wavelengths), **fit_args)
+        totalResidual=np.mean((rdts*1e6 - fitInterp(wavelengths))**2)
+        print("Mean sqr deviation: %.4e" % totalResidual)
 
         xMin, xMax = np.min(wavelengths),np.max(wavelengths)
         plt.xlim(xMin,xMax)
@@ -406,9 +473,32 @@ class CRDS_analysis:
         elif(legend_args != 'off'):
             ax1.legend(**legend_args)
 
+    def plotDataOutliers(self, fontsize=16, labelsize=14, **plot_args):
+        size=(12,2)
+        args = plot_args.copy()
+        if( 'figsize' in plot_args):
+            size=plot_args['figsize']
+            del args['figsize']
+        plt.figure(figsize=size)
+
+        stds=[]
+        for i,w in enumerate(self.dat['wavelength']):
+            stds.append(np.std(self.dat['rdt_array'][i]))
+        smin, smax = np.min(stds), np.max(stds)
+        for i,w in enumerate(self.dat['wavelength']):
+            rdts = np.array(self.dat['rdt_array'][i])*1e6
+            std = stds[i]
+            sval = (std-smin)/(smax-smin)
+            plt.plot([w]*len(rdts), rdts, 'o', ms=1+sval*5, alpha=sval*0.9+0.01,c=(sval,0,0))
+        args.setdefault('ms', 1)
+        args.setdefault('color', 'blue')
+        plt.plot(self.dat['wavelength'], np.array(self.dat['rdt_mean'])*1e6, 'o', **args)
+        plt.xlabel("Wavelength (nm)", size=fontsize)
+        plt.ylabel("Ringdown time ($\mathrm{\mu}$s)", size=fontsize)
+        plt.title("Outlier plot")
 
     # Plot the scale fit which results from the given wavelength fit coefficients
-    def plotWavlengthFit(self, wlCoeffs, crds_fit_object, rdt_dat=None, fontsize=16, labelsize=14, legend_args=None, spec_plot_args=None, **plot_args):
+    def plotWavlengthFit(self, wlCoeffs, crds_fit_object, weighted=True, alpha_mode=False, rdt_dat=None, fontsize=16, labelsize=14, plot_total_fit=True, legend_args=None, spec_plot_args=None, **plot_args):
         temps = np.array(self.temps_measured,dtype=float)
         #temps = np.array(dat['ldc_params'])[:,0]
         currs = self.currs
@@ -424,8 +514,9 @@ class CRDS_analysis:
 
         absorptions = 1.0/c_cm*(1.0/rdts - 1.0/self.vacuumRingdown(wavelengths))
 
-        fitGraphX, fitGraphY = crds_fit_object.computeTotalFitGraph(wavelengths, rdts, vacFit = self.vacFit)
-        fitGraphY = self.rdtFromAlpha(fitGraphY, fitGraphX)*1e6
+        fitGraphX, fitGraphY = crds_fit_object.computeTotalFitGraph(wavelengths, rdts, vacFit = self.vacFit, weighted=weighted)
+        if(not alpha_mode):
+            fitGraphY = self.rdtFromAlpha(fitGraphY, fitGraphX)*1e6
 
         dat_args = plot_args.copy()
         fit_args = plot_args.copy()
@@ -439,8 +530,16 @@ class CRDS_analysis:
         ax = plt.subplot(111) # Axis handle for custom legend
 
         dat_args.setdefault('markersize', 2)
-        ax.plot(wavelengths,rdts*1e6,'o',label='Data', **dat_args)
-        specPlots = crds_fit_object.plotFit_rdt(wavelengths, rdts, vacFit=self.vacFit)
+        if(not alpha_mode):
+            ax.plot(wavelengths,rdts*1e6,'o',label='Data', **dat_args)
+        else:
+            ax.plot(wavelengths,absorptions,'o',label='Data', **dat_args)
+        if(not alpha_mode):
+            specPlots = crds_fit_object.plotFit_rdt(wavelengths, rdts, vacFit=self.vacFit, weighted=weighted)
+            for i,s in enumerate(specPlots):
+                specPlots[i][1]=s[1]*1e6
+        else:
+            specPlots = crds_fit_object.plotFit(wavelengths, rdts, vacFit=self.vacFit, weighted=weighted)
 
         spec_args.setdefault('color')
         # HITRAN molecules
@@ -452,19 +551,20 @@ class CRDS_analysis:
             else:
                 lbl = crds_fit_object.mols[i]
             override = False
+            smask = (specPlots[i][0] >= xMin) & (specPlots[i][0] <= xMax)
             if(spec_plot_args is not None): # Allow user to override arguments for a specific plot
                 for spa in spec_plot_args:
                     if(spa[0] == '%s-%d' % (crds_fit_object.mols[i], iso_id)):
-                        ax.plot(specPlots[i][0],specPlots[i][1]*1e6,label=lbl, **spa[1])
+                        ax.plot(specPlots[i][0][smask],specPlots[i][1][smask],label=lbl, **spa[1])
                         override=True
                         break
             if(not override): # Remainder of keyword arguments are parssed to default plot call
-                ax.plot(specPlots[i][0],specPlots[i][1]*1e6,label=lbl, **spec_args)
+                ax.plot(specPlots[i][0][smask],specPlots[i][1][smask],label=lbl, **spec_args)
 
         # Non-HITRAN Cross sections
         for k,v in crds_fit_object.aux_indices.items():
             smask = (specPlots[v][0] >= xMin) & (specPlots[v][0] <= xMax)
-            ax.plot(specPlots[v][0][smask],specPlots[v][1][smask]*1e6,label=k, **spec_args)
+            ax.plot(specPlots[v][0][smask],specPlots[v][1][smask],label=k, **spec_args)
 
         # Shrink current axis by 20%, make room for legend outside plot
         box = ax.get_position()
@@ -472,7 +572,8 @@ class CRDS_analysis:
 
         fit_args.setdefault('color', 'black')
         fit_args.setdefault('lw',    0.75)
-        ax.plot(fitGraphX,fitGraphY,label='Total Fit', **fit_args)
+        if(plot_total_fit):
+            ax.plot(fitGraphX,fitGraphY,label='Total Fit', **fit_args)
         plt.xlim(xMin,xMax)
         plt.ylabel("Ringdown time ($\mathrm{\mu}$s)", size=fontsize)
         plt.xlabel("Wavelength (nm)", size=fontsize)
@@ -521,13 +622,62 @@ class CRDS_analysis:
         plt.plot(wavelengths,rdts,'o',markersize=2)
         plt.plot(fitGraphX,self.rdtFromAlpha(fitGraphY,fitGraphX),c='black')
     
+
+    def plotTempCurrScan(self, wlCoeffs, rdt_dat=None, fontsize=16, labelsize=14, legend_args=None, **plot_args):
+        temps = np.array(self.temps_measured,dtype=float)
+        #temps = np.array(dat['ldc_params'])[:,0]
+        currs = self.currs
+        if(rdt_dat is None):
+            rdts  = np.array(self.dat['rdt_mean'])
+        else:
+            rdts = np.array(rdt_dat)
+
+        wavelengths = wlCoeffs[0] + currs*wlCoeffs[1] + temps*wlCoeffs[2] + \
+            currs**2*wlCoeffs[3] + temps**2*wlCoeffs[4] + currs*temps*wlCoeffs[5]
+        xMin, xMax = np.min(wavelengths),np.max(wavelengths)
+
+        size=(12,4)
+        args = plot_args.copy()
+        if( 'figsize' in plot_args):
+            size=plot_args['figsize']
+            del args['figsize']
+
+        fig, (ax1,ax2) = plt.subplots(2, sharex=True, figsize=size)
+        n = np.arange(len(temps))
+        ax2.plot(n, temps)
+        ax2_t = ax2.twinx()
+        ax2_t.plot(n, currs, '--', c='red')
+        ax1.plot(n, wavelengths)
+
     def plotScaledHitran(self, wlCoeffs, crds_fit_object,plot_rdt = True):
         wl = self.wavelength(self.temps_measured, self.currs, wlCoeffs)
         hitX, hitY = crds_fit_object.computeTotalFitGraph(wl,np.array(self.dat['rdt_mean']))
         plt.plot(hitX,self.rdtFromAlpha(hitY,hitX)*1e6,label = 'Total Hitran Fit')
         
         
-    def hdfFileExport(self, wlCoeffs, crds_fit_object, outputFileName,DATA_FILE_NAME,VACUUM_FILE_NAME):
+    def filename_extractDate(self, filename):
+        import re, datetime
+        search_str = "(.*?)([1-9]|0[1-9]|1[0-2])(-)([1-9]|0[1-9]|1[0-9]|2[0-9]|3[0-9])(-)(20[0-9][0-9])(.*?)"
+        match = re.search(search_str,filename)
+        if(match is None):
+            print("Cannot extract date from: " + filename)
+            return None
+        month = int(match.group(2))
+        day = int(match.group(4))
+        year = int(match.group(6))
+        return datetime.datetime(month=month, day=day, year=year)
+
+    def filename_extractPressure(self, filename):
+        import re, datetime
+        search_str = "(.*?)([0-9]|[0-9][0-9]|[0-9][0-9][0-9])tor(.*?)"
+        match = re.search(search_str, filename.lower())
+        if(match is None):
+            print("Cannot extract pressure from: " + filename)
+            return None
+        pres = int(match.group(2))
+        return pres
+
+    def hdfFileExport(self, wlCoeffs, crds_fit_object, outputFileName,DATA_FILE_NAME,VACUUM_FILE_NAME, additional_params=None):
         import h5py
         
         wl = self.wavelength(self.temps_measured, self.currs, wlCoeffs)
@@ -581,6 +731,9 @@ class CRDS_analysis:
                         "Wavelength fit coefficients" : wlCoeffs,
                         "Scan Time (min)" : self.dat['time'][-1]/60,
                         "Number of scan points" : len(rdts_sorted)}
+            if(additional_params is not None):
+                for k,v in additional_params.items():
+                    metadata[k] = v
             #loop through all isotopologues and store calculated concentration
             tbl=self.getConcentrationTable(crds_fit_object, wlCoeffs)
             for i in range(len(crds_fit_object.mols)):
